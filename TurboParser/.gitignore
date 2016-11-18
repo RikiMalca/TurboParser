@@ -38,3 +38,8 @@ Thumbs.db
 
 # Some more ignorance
 out*.txt
+.cproject
+.project
+*.model
+*.predicted
+
