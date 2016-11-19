@@ -76,6 +76,7 @@ class Options {
   }
   bool use_averaging() { return use_averaging_; }
   string ilan_decoding() { return ilan_decoding_; }
+  string riki_decoding() { return riki_decoding_;}
   double alpha() { return alpha_; }
   double beta() { return beta_; }
   double gamma() { return gamma_; }
@@ -131,6 +132,7 @@ class Options {
   bool only_supported_features_; // Use only supported features.
   bool use_averaging_; // Include a final averaging step during training.
   string ilan_decoding_;
+  string riki_decoding_;
   double alpha_;
   double beta_;
   double gamma_;

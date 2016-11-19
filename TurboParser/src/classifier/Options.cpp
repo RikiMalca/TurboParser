@@ -32,6 +32,7 @@ DEFINE_string(file_prediction, "",
 DEFINE_bool(train, false,
             "True for training the parser.");
 DEFINE_string(ilan_decoding,"","ilan decoding algorithm");
+DEFINE_string(riki_decoding,"","riki decoding algorithm");
 DEFINE_double(alpha,1.0,"alpha for calculating the probability in ilan decoding algorithm");
 DEFINE_double(beta,0.5,"beta for loss/gain balancing in ilan decoding algorithm");
 DEFINE_double(gamma,0.0,"gamma for parser bias in ilan decoding algorithm");
@@ -74,6 +75,7 @@ void Options::Initialize() {
   train_ = FLAGS_train;
   test_ = FLAGS_test;
   ilan_decoding_ = FLAGS_ilan_decoding;
+  riki_decoding_ = FLAGS_riki_decoding;
   alpha_ = FLAGS_alpha;
   beta_ = FLAGS_beta;
   gamma_ = FLAGS_gamma;

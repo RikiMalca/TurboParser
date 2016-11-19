@@ -107,6 +107,9 @@ class DependencyDecoder : public Decoder {
                                  vector<vector<double> > *candidate_scores,
                                  vector<int> *heads,
                                  double *value);
+  void DecodeRikiMinLoss(Instance *instance, Parts *parts,
+                                            vector<double> &scores,
+                                            vector<double> *predicted_output);
   void inc_n_instances() {
 	 nInstances_++;
   };
