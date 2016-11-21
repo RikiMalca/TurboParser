@@ -29,7 +29,12 @@
 #include <Eigen/Dense>
 #include "logval.h"
 #include "Utils.h"
+#include <iterator>
+#include <utility>
+#include <vector>
+#include <algorithm>
 #include <fstream>
+#include <sys/time.h>
 
 #define SSTR( x ) dynamic_cast< std::ostringstream & >( \
         ( std::ostringstream() << std::dec << x ) ).str()
@@ -249,12 +254,34 @@ void DependencyDecoder::Decode(Instance *instance, Parts *parts,
 
   predicted_output->clear();
   predicted_output->resize(parts->size(), 0.0);
-  //cout << "riki decoding " ;
   if(pipe_->GetDependencyOptions()->riki_decoding() == "firstIterationScores"){
 	  DecodeRikiMinLoss(instance, parts, copied_scores,predicted_output);
+  } else if (pipe_->GetDependencyOptions()->riki_decoding() == "firstIterationBuildGreedy"){
+	  struct timeval tp;
+	  gettimeofday(&tp, NULL);
+	  long int time_begin = tp.tv_usec;
+	  DecodeRikiMinLossGreedyBuild(instance, parts, copied_scores, predicted_output);
+	  gettimeofday(&tp, NULL);
+	  LOG(INFO) << "took " << tp.tv_usec - time_begin << endl;
+  } else if(pipe_->GetDependencyOptions()->riki_decoding() =="firstIterationBuildGreedyCalcLiteJustGain"){
+	  DecodeRikiMinLossGreedyBuildCalcLiteJustGain(instance, parts, copied_scores, predicted_output);
   }
+ else if (pipe_->GetDependencyOptions()->riki_decoding() == "firstIterationBuildGreedyCalcLite"){
+	  struct timeval tp;
+	  gettimeofday(&tp, NULL);
+	  long int time_begin = tp.tv_usec;
+	  DecodeRikiMinLossGreedyBuildCalcLite(instance, parts, copied_scores, predicted_output);
+	  gettimeofday(&tp, NULL);
+	  LOG(INFO) << "took " << tp.tv_usec - time_begin << endl;
+}
+
   else if (pipe_->GetDependencyOptions()->ilan_decoding() == "minLoss") {
+	  struct timeval tp;
+	  gettimeofday(&tp, NULL);
+	  long int time_begin = tp.tv_usec;
 	  DecodeMinLoss(instance, parts, copied_scores,predicted_output);
+	  gettimeofday(&tp, NULL);
+	  LOG(INFO) << "took ilan " << tp.tv_usec - time_begin << endl;
   } else if (pipe_->GetDependencyOptions()->ilan_decoding() == "2SidedMinLoss") {
 	  Decode2SidedMinLoss(instance, parts, copied_scores,predicted_output);
   } else if (pipe_->GetDependencyOptions()->ilan_decoding() != "") {
@@ -1396,6 +1423,142 @@ void updateData(int u, int v,DependencyParts *dependency_parts, int num_arcs, in
 	(*edge2parts)[r].clear();
 }
 
+void calcLossLite(int r, const vector<double> &scores, vector<vector<int> > &edge2parts, const vector<double> &part2prob, vector<vector<int> > *edge2LostEdges,
+		vector<vector<int> > *edge2LostParts, double *val, const vector<double> *part2val, bool printIlan, DependencyParts *dependency_parts, double beta) {
+	double edge_prob = part2prob[r];
+	double gain = scores[r];
+	double partsGain = 0.0;
+
+	vector<int> gainedParts2remove;
+	for (int part_index = 0; part_index < edge2parts[r].size(); part_index++) {
+		int part_r = edge2parts[r][part_index];
+		if (part2prob[part_r] >= -0.5) {
+			//gainedParts2remove.push_back(part_index);
+		//} else {
+			partsGain += (*part2val)[part_r];
+			//if (printIlan) {
+			//	cout << ", " << (*dependency_parts)[part_r]->toStr() << " = " << (*part2val)[part_r] / edge_prob;
+			//}
+		}
+	}
+	partsGain /= edge_prob;
+	gain += partsGain;
+	/*
+	for (int part2removeIndex = gainedParts2remove.size() - 1; part2removeIndex >= 0; part2removeIndex--) {
+		edge2parts[r].erase(edge2parts[r].begin() + gainedParts2remove[part2removeIndex]);
+	}*/
+
+	double loss = 0.0;
+	vector<int> arcs2remove;
+	for (int lost_arc_index = 0; lost_arc_index < (*edge2LostEdges)[r].size(); lost_arc_index++) {
+		int lost_arc_r = (*edge2LostEdges)[r][lost_arc_index];
+		if (part2prob[lost_arc_r] >= -0.5) {
+			//arcs2remove.push_back(lost_arc_index);
+		//} else {
+			loss += (*part2val)[lost_arc_r];
+			//if (printIlan) {
+			//	cout << (*dependency_parts)[lost_arc_r]->toStr() << " = " << (*part2val)[lost_arc_r] << ", ";
+			//}
+		}
+	}
+	/*
+	for (int arc2removeIndex = arcs2remove.size() - 1; arc2removeIndex >= 0; arc2removeIndex--) {
+		(*edge2LostEdges)[r].erase((*edge2LostEdges)[r].begin() + arcs2remove[arc2removeIndex]);
+	}*/
+	vector<int> parts2remove;
+	for (int lost_part_index = 0; lost_part_index < (*edge2LostParts)[r].size(); lost_part_index++ ) {
+		int lost_part_r = (*edge2LostParts)[r][lost_part_index];
+		if (part2prob[lost_part_r] != -0.5) {
+			//parts2remove.push_back(lost_part_index);
+		//} else {
+			loss += (*part2val)[lost_part_r];
+			/*
+			if (printIlan) {
+				cout << (*dependency_parts)[lost_part_r]->toStr() << " = " << (*part2val)[lost_part_r] << ", ";
+			}*/
+		}
+	}
+	/*
+	if (printIlan) {
+		cout << endl;
+	}
+
+	for (int part2removeIndex = parts2remove.size() - 1; part2removeIndex >= 0; part2removeIndex--) {
+		(*edge2LostParts)[r].erase((*edge2LostParts)[r].begin() + parts2remove[part2removeIndex]);
+	}*/
+
+	(*val) = (beta * loss) - ((1 - beta) * gain);
+}
+
+void calcLossLiteJustGain(int r, const vector<double> &scores, vector<vector<int> > &edge2parts, const vector<double> &part2prob, vector<vector<int> > *edge2LostEdges,
+		vector<vector<int> > *edge2LostParts, double *val, const vector<double> *part2val, bool printIlan, DependencyParts *dependency_parts, double beta) {
+	double edge_prob = part2prob[r];
+	double gain = scores[r];
+	double partsGain = 0.0;
+
+	vector<int> gainedParts2remove;
+	for (int part_index = 0; part_index < edge2parts[r].size(); part_index++) {
+		int part_r = edge2parts[r][part_index];
+		if (part2prob[part_r] >= -0.5) {
+			//gainedParts2remove.push_back(part_index);
+		//} else {
+			partsGain += (*part2val)[part_r];
+			//if (printIlan) {
+			//	cout << ", " << (*dependency_parts)[part_r]->toStr() << " = " << (*part2val)[part_r] / edge_prob;
+			//}
+		}
+	}
+	partsGain /= edge_prob;
+	gain += partsGain;
+	/*
+	for (int part2removeIndex = gainedParts2remove.size() - 1; part2removeIndex >= 0; part2removeIndex--) {
+		edge2parts[r].erase(edge2parts[r].begin() + gainedParts2remove[part2removeIndex]);
+	}
+
+	double loss = 0.0;
+	vector<int> arcs2remove;
+	for (int lost_arc_index = 0; lost_arc_index < (*edge2LostEdges)[r].size(); lost_arc_index++) {
+		int lost_arc_r = (*edge2LostEdges)[r][lost_arc_index];
+		if (part2prob[lost_arc_r] >= -0.5) {
+			//arcs2remove.push_back(lost_arc_index);
+		//} else {
+			loss += (*part2val)[lost_arc_r];
+			//if (printIlan) {
+			//	cout << (*dependency_parts)[lost_arc_r]->toStr() << " = " << (*part2val)[lost_arc_r] << ", ";
+			//}
+		}
+	}
+	/*
+	for (int arc2removeIndex = arcs2remove.size() - 1; arc2removeIndex >= 0; arc2removeIndex--) {
+		(*edge2LostEdges)[r].erase((*edge2LostEdges)[r].begin() + arcs2remove[arc2removeIndex]);
+	}
+	vector<int> parts2remove;
+	for (int lost_part_index = 0; lost_part_index < (*edge2LostParts)[r].size(); lost_part_index++ ) {
+		int lost_part_r = (*edge2LostParts)[r][lost_part_index];
+		if (part2prob[lost_part_r] != -0.5) {
+			//parts2remove.push_back(lost_part_index);
+		//} else {
+			loss += (*part2val)[lost_part_r];
+			/*
+			if (printIlan) {
+				cout << (*dependency_parts)[lost_part_r]->toStr() << " = " << (*part2val)[lost_part_r] << ", ";
+			}
+		}
+	}
+
+	if (printIlan) {
+		cout << endl;
+	}
+
+	for (int part2removeIndex = parts2remove.size() - 1; part2removeIndex >= 0; part2removeIndex--) {
+		(*edge2LostParts)[r].erase((*edge2LostParts)[r].begin() + parts2remove[part2removeIndex]);
+	}*/
+
+	//(*val) = (beta * loss) - ((1 - beta) * gain);
+	(*val) = gain;
+}
+
+
 void calcLoss(int r, const vector<double> &scores, vector<vector<int> > &edge2parts, const vector<double> &part2prob, vector<vector<int> > *edge2LostEdges,
 		vector<vector<int> > *edge2LostParts, double *val, const vector<double> *part2val, bool printIlan, DependencyParts *dependency_parts, double beta) {
 	double edge_prob = part2prob[r];
@@ -1439,9 +1602,6 @@ void calcLoss(int r, const vector<double> &scores, vector<vector<int> > &edge2pa
 		}
 	}
 	for (int arc2removeIndex = arcs2remove.size() - 1; arc2removeIndex >= 0; arc2removeIndex--) {
-//		cout << "index " << arc2removeIndex;
-//		cout << "deleting " << arcs2remove[arc2removeIndex];
-//		cout << "out of " << (*edge2LostEdges)[r].size() << endl;
 		(*edge2LostEdges)[r].erase((*edge2LostEdges)[r].begin() + arcs2remove[arc2removeIndex]);
 	}
 	vector<int> parts2remove;
@@ -1465,6 +1625,7 @@ void calcLoss(int r, const vector<double> &scores, vector<vector<int> > &edge2pa
 
 	(*val) = (beta * loss) - ((1 - beta) * gain);
 }
+
 
 double calcEdgeContribution(const int r, const vector<double> *predicted_output, const vector<vector<int> >  edge2parts,
 		const vector<double> &scores,const DependencyParts *dependency_parts,const vector<vector<int> > *E) {
@@ -2290,6 +2451,7 @@ void DependencyDecoder::DecodeMinLoss(Instance *instance, Parts *parts,
 			break;
 		}
 		heads[best_v] = best_u;
+		LOG(INFO) << "call to update data" << endl;
 		updateData(best_u, best_v,dependency_parts, num_arcs, sentenceSize, &roots, &part2prob, scores,
 				&edge2LostEdges, &edge2LostParts, &E, &subTrees, &edge2parts, predicted_output, &part2val,alpha, heads);
 		if (printIlan) {
@@ -2372,7 +2534,7 @@ void DependencyDecoder::DecodeRikiMinLoss(Instance *instance, Parts *parts,
 	vector<vector<int> > edge2LostEdges, edge2LostParts, E, subTrees, edge2parts, edge2partsCopy, ECopy;
 
 	initDataStructures(dependency_parts, offset_arcs, num_arcs, sentenceSize, &part2prob, scores, &edge2LostEdges, &edge2LostParts, &E, &edge2parts, &part2val, alpha, &heads);
-	//initsecondaryDS(&roots, &subTrees, sentenceSize);
+	initsecondaryDS(&roots, &subTrees, sentenceSize);
 	edge2partsCopy = edge2parts;
 	ECopy = E;
 
@@ -2386,9 +2548,9 @@ void DependencyDecoder::DecodeRikiMinLoss(Instance *instance, Parts *parts,
 				if (r < 0 ){
 					continue;
 				}
-				LOG(INFO) << "testing edge "<< r << endl;
+				//LOG(INFO) << "testing edge "<< r << endl;
 				calcLoss(r, scores, edge2parts, part2prob, &edge2LostEdges, &edge2LostParts, &currLoss, &part2val,printRiki, dependency_parts, beta);
-				LOG(INFO) << "the loss value of edge  "<< r << " is " << currLoss << endl;
+				//LOG(INFO) << "the loss value of edge  "<< r << " is " << currLoss << endl;
 				new_scores[r] = -1*currLoss;
 				LOG(INFO) << "(u,v)=" << u << "," << v << ", loss =" << currLoss  << endl;
 			}
@@ -2398,12 +2560,170 @@ void DependencyDecoder::DecodeRikiMinLoss(Instance *instance, Parts *parts,
 	// building the tree with the new scores
 	double value;
 	LOG(INFO)  << "Started basic decode" << endl;
+	//GreedyTreeBuilder(sentenceSize, new_scores, &E, predicted_output);
 	DecodeBasic(instance, parts, new_scores, predicted_output, &value);
 	if (pipe_->GetDependencyOptions()->improveLocal() > 0) {
 		improveLocal(predicted_output,subTrees,edge2partsCopy,scores, dependency_parts,
 				sentenceSize, num_arcs, &ECopy, heads,pipe_->GetDependencyOptions()->improveLocal());
 	}
 }
+
+bool InsertEdge(int u, int v, int r ,vector<int> *roots, vector<vector<int> > *subTrees, vector<vector<int> > *edge2parts,
+		vector<double> *predicted_output, vector<vector<int> > *E, DependencyParts *dependency_parts){
+	int uRoot = (*roots)[u];
+	int vRoot = (*roots)[v];
+	if(uRoot == vRoot || vRoot != v){
+		return false;
+	}
+	/*
+	int currNode = u;
+	int currRoot = uRoot;
+	while(currNode != currRoot){
+		currNode = currRoot;
+		currRoot = (*roots)[currNode];
+		if (currRoot == vRoot){
+			return false;
+		}
+	}
+	(*roots)[v] = u; */
+
+	vector<int> vSubTree = (*subTrees)[v];
+	for (int j = 0; j < vSubTree.size(); j++) {
+		int currNode = vSubTree[j];
+		(*roots)[currNode] = uRoot;
+	}
+	(*subTrees)[uRoot].insert((*subTrees)[uRoot].end(), vSubTree.begin(),vSubTree.end());
+
+
+	 //insert to predicted output
+	 (*predicted_output)[r] = 1.0;
+	for (int j = 0; j < (*edge2parts)[r].size(); j++) {
+		int r2 = (*edge2parts)[r][j];
+		// check if part is complete
+		int r3,r4,r5,h,m,s,g,k,os;
+		DependencyPartSibl *sibl;
+		DependencyPartGrandpar *GP;
+		DependencyPartGrandSibl *lostGS;
+		DependencyPartTriSibl*lostTS;
+		Part *currPart = (*dependency_parts)[r2];
+		switch (currPart->type()) {
+			case DEPENDENCYPART_SIBL:
+				sibl = static_cast<DependencyPartSibl*>(currPart);
+				h = sibl->head();
+				m = sibl->modifier();
+				s = sibl->sibling();
+				r3 = (*E)[h][m];
+				r4 = (*E)[h][s];
+				if ((r3 == -2) && (r4 == -2)) {
+					(*predicted_output)[r2] = 1.0;
+				}
+				break;
+			case DEPENDENCYPART_GRANDPAR:
+				GP = static_cast<DependencyPartGrandpar*>(currPart);
+				g = GP->grandparent();
+				h = GP->head();
+				m = GP->modifier();
+				r3 = (*E)[h][m];
+				r4 = (*E)[g][h];
+				if ((r3 == -2) && (r4 == -2)) {
+					(*predicted_output)[r2] = 1.0;
+				}
+				break;
+			case DEPENDENCYPART_GRANDSIBL:
+				lostGS = static_cast<DependencyPartGrandSibl*>(currPart);
+				g = lostGS->grandparent();
+				h = lostGS->head();
+				m = lostGS->modifier();
+				s = lostGS->sibling();
+				r3 = (*E)[g][h];
+				r4 = (*E)[h][m];
+				r5 = (*E)[h][s];
+				if ((r3 == -2) && (r4 == -2) && (r5 == -2)) {
+					(*predicted_output)[r2] = 1.0;
+				}
+				break;
+			case DEPENDENCYPART_TRISIBL:
+				lostTS = static_cast<DependencyPartTriSibl*>(currPart);
+				h = lostTS->head();
+				m = lostTS->modifier();
+				s = lostTS->sibling();
+				os = lostTS->other_sibling();
+				r3 = (*E)[h][m];
+				r4 = (*E)[h][s];
+				r5 = (*E)[h][os];
+				if ((r3 == -2) && (r4 == -2) && (r5 == -2)) {
+					(*predicted_output)[r2] = 1.0;
+				}
+				break;
+			default:
+				LOG(ERROR) << "BAD PART TYPE: " << currPart->type() << endl;
+				CHECK(false);
+		}
+	}
+	//(*edge2parts)[r].clear();
+
+
+	return true;
+}
+
+
+bool compareByScore( const pair< pair <int, int> , pair <int, double> > & a, const pair< pair <int, int> , pair <int, double> > & b) {
+	  return a.second.second > b.second.second;
+	}
+
+
+void DependencyDecoder::GreedyTreeBuilder(int sentenceSize,
+		const vector<double> &scores, vector<vector<int> > *E,
+		vector<double> *predicted_output, Parts *parts, vector<int> *heads, vector<vector<int> > *edge2parts)
+/***
+ * The function inserts a new edge to the graph and creates a new sub trees topology.
+ */
+{
+
+	vector<pair< pair <int, int> , pair <int, double> > > EdgesMap (sentenceSize * sentenceSize,
+			make_pair(make_pair(-1, -1 ), make_pair(-1,-1.0*INFINITY)));
+	vector<int> roots (sentenceSize, 0);
+	vector<vector<int> > subTrees;
+	// initialization
+	DependencyParts *dependency_parts = static_cast<DependencyParts*>(parts);
+	int offset_arcs, num_arcs;
+	dependency_parts->GetOffsetArc(&offset_arcs, &num_arcs);
+
+	for(int u = 0 ; u < sentenceSize; u ++){
+		roots[u] = u;
+		for(int v =0 ; v<sentenceSize; v++){
+			if ((u==v) || ((*E)[u][v]<0)){
+				continue;
+			}
+			int r = (*E)[u][v];
+			EdgesMap[r].first = make_pair(u, v);
+			EdgesMap[r].second = make_pair(r, scores[r]);
+
+		}
+	}
+
+	initsecondaryDS(&roots, &subTrees, sentenceSize);
+
+	sort(EdgesMap.begin(), EdgesMap.end(), compareByScore);
+
+	int edges_used = 0;
+
+	for(int i=0; i< EdgesMap.size(); i ++ ) {
+		//LOG(INFO) << EdgesMap[i].second.second  << " ";
+		if(EdgesMap[i].second.second < 0 || (edges_used == sentenceSize - 1)){
+			break;
+		}
+		if(InsertEdge(EdgesMap[i].first.first, EdgesMap[i].first.second, EdgesMap[i].second.first, &roots, &subTrees, edge2parts, predicted_output,E, dependency_parts)){
+			edges_used += 1;
+		}
+
+
+	}
+	if(edges_used < sentenceSize - 1){
+		LOG(INFO)  << "NOT A TREE! " << edges_used << " from " << sentenceSize -1 << endl;
+	}
+}
+
 
 void DependencyDecoder::Decode2SidedMinLoss(Instance *instance, Parts *parts,
                                           vector<double> &scores,
@@ -2495,6 +2815,288 @@ void DependencyDecoder::Decode2SidedMinLoss(Instance *instance, Parts *parts,
 
 }
 
+
+void DependencyDecoder::DecodeRikiMinLossGreedyBuild(Instance *instance, Parts *parts,
+                                          vector<double> &scores,
+                                          vector<double> *predicted_output) {
+
+	bool printRiki = false;
+	DependencyParts *dependency_parts = static_cast<DependencyParts*>(parts);
+	DependencyInstanceNumeric* sentence = static_cast<DependencyInstanceNumeric*>(instance);
+	int sentenceSize = sentence->size();
+	vector<double> new_scores(scores); // initialize the vector to zeros
+	double alpha = pipe_->GetDependencyOptions()->alpha();
+	double beta = pipe_->GetDependencyOptions()->beta();
+	/*double gamma = pipe_->GetDependencyOptions()->gamma();
+	double gamma2 = pipe_->GetDependencyOptions()->gamma2(); */
+	int offset_arcs, num_arcs;
+	dependency_parts->GetOffsetArc(&offset_arcs, &num_arcs);
+
+	vector<int> parserHeads;
+	/*if (pipe_->GetDependencyOptions()->gamma() > 0.0) {
+		initParserHeads(pipe_->GetDependencyOptions()->GetParserResultsDirPath(),get_n_instances(), &parserHeads);
+		for (int v = 1; v < sentenceSize; v++) {
+			int u = parserHeads[v];
+			int r = dependency_parts->FindArc(u,v);
+			if (r >= 0) {
+				scores[r] += gamma;
+			}
+		}
+	}
+	if (pipe_->GetDependencyOptions()->gamma2() > 0.0) {
+		if (parserHeads.size() == 0) {
+			initParserHeads(pipe_->GetDependencyOptions()->GetParserResultsDirPath(),get_n_instances(), &parserHeads);
+		}
+		for (int r = 0; r < dependency_parts->size(); r++) {
+			DependencyPartSibl *Sibl;
+			DependencyPartGrandpar *GP;
+			Part *currPart = (*dependency_parts)[r];
+			int h,m,s,g;
+			switch (currPart->type()) {
+				case DEPENDENCYPART_SIBL:
+					Sibl = static_cast<DependencyPartSibl*>(currPart);
+					h = Sibl->head();
+					m = Sibl->modifier();
+					s = Sibl->sibling();
+					if ((parserHeads[m] == h) && (parserHeads[s] == h) ) {
+						scores[r] += gamma2;
+					}
+					break;
+				case DEPENDENCYPART_GRANDPAR:
+					GP = static_cast<DependencyPartGrandpar*>(currPart);
+					g = GP->grandparent();
+					h = GP->head();
+					m = GP->modifier();
+					if ((parserHeads[m] == h) && (parserHeads[h] == g) ) {
+						scores[r] += gamma2;
+					}
+					break;
+				default:
+					break;
+			}
+		}
+	}
+	 */
+
+	vector<int> roots,heads;
+	vector<double> part2prob, part2val;
+	vector<vector<int> > edge2LostEdges, edge2LostParts, E, subTrees, edge2parts;
+
+	initDataStructures(dependency_parts, offset_arcs, num_arcs, sentenceSize, &part2prob, scores, &edge2LostEdges, &edge2LostParts, &E, &edge2parts, &part2val, alpha, &heads);
+	initsecondaryDS(&roots, &subTrees, sentenceSize);
+	// n * ( E + n )
+	//LOG(INFO)  << "Start initializing new scores" << endl;
+	double currLoss;
+	for (int iter_num = 0; iter_num < sentenceSize - 1; iter_num++) {
+		for (int v = 1; v < sentenceSize; v++) {
+			for (int u = 0; u < sentenceSize && u!=v; u++) {
+				int r = E[u][v];
+				if (r < 0 ){
+					continue;
+				}
+				//LOG(INFO) << "testing edge "<< r << endl;
+				calcLoss(r, scores, edge2parts, part2prob, &edge2LostEdges, &edge2LostParts, &currLoss, &part2val,printRiki, dependency_parts, beta);
+				//LOG(INFO) << "the loss value of edge  "<< r << " is " << currLoss << endl;
+				new_scores[r] = -1*currLoss;
+				//LOG(INFO) << "(u,v)=" << u << "," << v << ", loss =" << currLoss  << endl;
+			}
+		}
+	}
+
+	GreedyTreeBuilder(sentenceSize, new_scores, &E, predicted_output, parts, &heads, &edge2parts);
+	/*if (pipe_->GetDependencyOptions()->improveLocal() > 0) {
+		improveLocal(predicted_output,subTrees,edge2partsCopy,scores, dependency_parts,
+				sentenceSize, num_arcs, &ECopy, heads,pipe_->GetDependencyOptions()->improveLocal());
+	}*/
+}
+
+void DependencyDecoder::DecodeRikiMinLossGreedyBuildCalcLite(Instance *instance, Parts *parts,
+                                          vector<double> &scores,
+                                          vector<double> *predicted_output) {
+
+	bool printRiki = false;
+	DependencyParts *dependency_parts = static_cast<DependencyParts*>(parts);
+	DependencyInstanceNumeric* sentence = static_cast<DependencyInstanceNumeric*>(instance);
+	int sentenceSize = sentence->size();
+	vector<double> new_scores(scores); // initialize the vector to zeros
+	double alpha = pipe_->GetDependencyOptions()->alpha();
+	double beta = pipe_->GetDependencyOptions()->beta();
+	/*double gamma = pipe_->GetDependencyOptions()->gamma();
+	double gamma2 = pipe_->GetDependencyOptions()->gamma2(); */
+	int offset_arcs, num_arcs;
+	dependency_parts->GetOffsetArc(&offset_arcs, &num_arcs);
+
+	vector<int> parserHeads;
+	/*if (pipe_->GetDependencyOptions()->gamma() > 0.0) {
+		initParserHeads(pipe_->GetDependencyOptions()->GetParserResultsDirPath(),get_n_instances(), &parserHeads);
+		for (int v = 1; v < sentenceSize; v++) {
+			int u = parserHeads[v];
+			int r = dependency_parts->FindArc(u,v);
+			if (r >= 0) {
+				scores[r] += gamma;
+			}
+		}
+	}
+	if (pipe_->GetDependencyOptions()->gamma2() > 0.0) {
+		if (parserHeads.size() == 0) {
+			initParserHeads(pipe_->GetDependencyOptions()->GetParserResultsDirPath(),get_n_instances(), &parserHeads);
+		}
+		for (int r = 0; r < dependency_parts->size(); r++) {
+			DependencyPartSibl *Sibl;
+			DependencyPartGrandpar *GP;
+			Part *currPart = (*dependency_parts)[r];
+			int h,m,s,g;
+			switch (currPart->type()) {
+				case DEPENDENCYPART_SIBL:
+					Sibl = static_cast<DependencyPartSibl*>(currPart);
+					h = Sibl->head();
+					m = Sibl->modifier();
+					s = Sibl->sibling();
+					if ((parserHeads[m] == h) && (parserHeads[s] == h) ) {
+						scores[r] += gamma2;
+					}
+					break;
+				case DEPENDENCYPART_GRANDPAR:
+					GP = static_cast<DependencyPartGrandpar*>(currPart);
+					g = GP->grandparent();
+					h = GP->head();
+					m = GP->modifier();
+					if ((parserHeads[m] == h) && (parserHeads[h] == g) ) {
+						scores[r] += gamma2;
+					}
+					break;
+				default:
+					break;
+			}
+		}
+	}
+	 */
+
+	vector<int> roots,heads;
+	vector<double> part2prob, part2val;
+	vector<vector<int> > edge2LostEdges, edge2LostParts, E, subTrees, edge2parts;
+
+	initDataStructures(dependency_parts, offset_arcs, num_arcs, sentenceSize, &part2prob, scores, &edge2LostEdges, &edge2LostParts, &E, &edge2parts, &part2val, alpha, &heads);
+	initsecondaryDS(&roots, &subTrees, sentenceSize);
+	// n * ( E + n )
+	//LOG(INFO)  << "Start initializing new scores" << endl;
+	double currLoss;
+	for (int iter_num = 0; iter_num < sentenceSize - 1; iter_num++) {
+		for (int v = 1; v < sentenceSize; v++) {
+			for (int u = 0; u < sentenceSize && u!=v; u++) {
+				int r = E[u][v];
+				if (r < 0 ){
+					continue;
+				}
+				//LOG(INFO) << "testing edge "<< r << endl;
+				calcLossLite(r, scores, edge2parts, part2prob, &edge2LostEdges, &edge2LostParts, &currLoss, &part2val,printRiki, dependency_parts, beta);
+				//LOG(INFO) << "the loss value of edge  "<< r << " is " << currLoss << endl;
+				new_scores[r] = -1*currLoss;
+				//LOG(INFO) << "(u,v)=" << u << "," << v << ", loss =" << currLoss  << endl;
+			}
+		}
+	}
+
+	GreedyTreeBuilder(sentenceSize, new_scores, &E, predicted_output, parts, &heads, &edge2parts);
+	/*if (pipe_->GetDependencyOptions()->improveLocal() > 0) {
+		improveLocal(predicted_output,subTrees,edge2partsCopy,scores, dependency_parts,
+				sentenceSize, num_arcs, &ECopy, heads,pipe_->GetDependencyOptions()->improveLocal());
+	}*/
+}
+
+void DependencyDecoder::DecodeRikiMinLossGreedyBuildCalcLiteJustGain(Instance *instance, Parts *parts,
+                                          vector<double> &scores,
+                                          vector<double> *predicted_output) {
+
+	bool printRiki = false;
+	DependencyParts *dependency_parts = static_cast<DependencyParts*>(parts);
+	DependencyInstanceNumeric* sentence = static_cast<DependencyInstanceNumeric*>(instance);
+	int sentenceSize = sentence->size();
+	vector<double> new_scores(scores); // initialize the vector to zeros
+	double alpha = pipe_->GetDependencyOptions()->alpha();
+	double beta = pipe_->GetDependencyOptions()->beta();
+	/*double gamma = pipe_->GetDependencyOptions()->gamma();
+	double gamma2 = pipe_->GetDependencyOptions()->gamma2(); */
+	int offset_arcs, num_arcs;
+	dependency_parts->GetOffsetArc(&offset_arcs, &num_arcs);
+
+	vector<int> parserHeads;
+	/*if (pipe_->GetDependencyOptions()->gamma() > 0.0) {
+		initParserHeads(pipe_->GetDependencyOptions()->GetParserResultsDirPath(),get_n_instances(), &parserHeads);
+		for (int v = 1; v < sentenceSize; v++) {
+			int u = parserHeads[v];
+			int r = dependency_parts->FindArc(u,v);
+			if (r >= 0) {
+				scores[r] += gamma;
+			}
+		}
+	}
+	if (pipe_->GetDependencyOptions()->gamma2() > 0.0) {
+		if (parserHeads.size() == 0) {
+			initParserHeads(pipe_->GetDependencyOptions()->GetParserResultsDirPath(),get_n_instances(), &parserHeads);
+		}
+		for (int r = 0; r < dependency_parts->size(); r++) {
+			DependencyPartSibl *Sibl;
+			DependencyPartGrandpar *GP;
+			Part *currPart = (*dependency_parts)[r];
+			int h,m,s,g;
+			switch (currPart->type()) {
+				case DEPENDENCYPART_SIBL:
+					Sibl = static_cast<DependencyPartSibl*>(currPart);
+					h = Sibl->head();
+					m = Sibl->modifier();
+					s = Sibl->sibling();
+					if ((parserHeads[m] == h) && (parserHeads[s] == h) ) {
+						scores[r] += gamma2;
+					}
+					break;
+				case DEPENDENCYPART_GRANDPAR:
+					GP = static_cast<DependencyPartGrandpar*>(currPart);
+					g = GP->grandparent();
+					h = GP->head();
+					m = GP->modifier();
+					if ((parserHeads[m] == h) && (parserHeads[h] == g) ) {
+						scores[r] += gamma2;
+					}
+					break;
+				default:
+					break;
+			}
+		}
+	}
+	 */
+
+	vector<int> roots,heads;
+	vector<double> part2prob, part2val;
+	vector<vector<int> > edge2LostEdges, edge2LostParts, E, subTrees, edge2parts;
+
+	initDataStructures(dependency_parts, offset_arcs, num_arcs, sentenceSize, &part2prob, scores, &edge2LostEdges, &edge2LostParts, &E, &edge2parts, &part2val, alpha, &heads);
+	initsecondaryDS(&roots, &subTrees, sentenceSize);
+	// n * ( E + n )
+	//LOG(INFO)  << "Start initializing new scores" << endl;
+	double currLoss;
+	for (int iter_num = 0; iter_num < sentenceSize - 1; iter_num++) {
+		for (int v = 1; v < sentenceSize; v++) {
+			for (int u = 0; u < sentenceSize && u!=v; u++) {
+				int r = E[u][v];
+				if (r < 0 ){
+					continue;
+				}
+				//LOG(INFO) << "testing edge "<< r << endl;
+				calcLossLiteJustGain(r, scores, edge2parts, part2prob, &edge2LostEdges, &edge2LostParts, &currLoss, &part2val,printRiki, dependency_parts, beta);
+				//LOG(INFO) << "the loss value of edge  "<< r << " is " << currLoss << endl;
+				new_scores[r] = currLoss;
+				//LOG(INFO) << "(u,v)=" << u << "," << v << ", loss =" << currLoss  << endl;
+			}
+		}
+	}
+
+	GreedyTreeBuilder(sentenceSize, new_scores, &E, predicted_output, parts, &heads, &edge2parts);
+	/*if (pipe_->GetDependencyOptions()->improveLocal() > 0) {
+		improveLocal(predicted_output,subTrees,edge2partsCopy,scores, dependency_parts,
+				sentenceSize, num_arcs, &ECopy, heads,pipe_->GetDependencyOptions()->improveLocal());
+	}*/
+}
 
 // Decode building a factor graph and calling the AD3 algorithm.
 void DependencyDecoder::DecodeFactorGraph(Instance *instance, Parts *parts,

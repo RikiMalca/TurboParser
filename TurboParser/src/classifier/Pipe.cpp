@@ -397,10 +397,10 @@ void Pipe::TrainEpoch(int epoch) {
   LOG(INFO) << " Iteration #" << epoch + 1;
 
   dictionary_->StopGrowth();
-  bool ilansPrints = false;
+  bool ilansPrints = true;
   for (int i = 0; i < instances_.size(); i++) {
 
-	ilansPrints = false;
+	//ilansPrints = false;
 	bool ilansP = false;
 //	if ((epoch == 4) && (i == 24123)) {
 	if ((epoch == 0) && (i == 22612)) {
@@ -526,9 +526,10 @@ void Pipe::TrainEpoch(int epoch) {
         CHECK_GT(decay, 0.0);
         parameters_->Scale(decay);
       }
-
+      cout << "MakeGradientStep" << endl;
       MakeGradientStep(parts, features, eta, t, gold_outputs,
                        predicted_outputs);
+      cout << "MakeGradientStep finish" << endl;
     } else {
       CHECK(false) << "Unknown algorithm: " << options_->GetTrainingAlgorithm();
     }

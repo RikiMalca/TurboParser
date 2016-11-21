@@ -1,6 +1,5 @@
 #!/bin/bash
 
-make clean
 make
 cd src/tagger
 make

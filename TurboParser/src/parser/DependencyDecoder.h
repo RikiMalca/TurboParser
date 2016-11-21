@@ -54,6 +54,10 @@ class DependencyDecoder : public Decoder {
                            double *cost,
                            double *loss);
 
+  void GreedyTreeBuilder(int sentenceSize,
+  		const vector<double> &scores, vector<vector<int> > *E,
+  		vector<double> *predicted_output, Parts *parts, vector<int> *heads, vector<vector<int> > *edge2parts);
+
   void DecodeMarginals(Instance *instance, Parts *parts,
                        const vector<double> &scores,
                        const vector<double> &gold_output,
@@ -107,7 +111,17 @@ class DependencyDecoder : public Decoder {
                                  vector<vector<double> > *candidate_scores,
                                  vector<int> *heads,
                                  double *value);
+  void DecodeRikiMinLossGreedyBuildCalcLiteJustGain(Instance *instance, Parts *parts,
+                                            vector<double> &scores,
+                                            vector<double> *predicted_output);
   void DecodeRikiMinLoss(Instance *instance, Parts *parts,
+                                            vector<double> &scores,
+                                            vector<double> *predicted_output);
+
+  void DecodeRikiMinLossGreedyBuild(Instance *instance, Parts *parts,
+                                            vector<double> &scores,
+                                            vector<double> *predicted_output);
+  void DecodeRikiMinLossGreedyBuildCalcLite(Instance *instance, Parts *parts,
                                             vector<double> &scores,
                                             vector<double> *predicted_output);
   void inc_n_instances() {
