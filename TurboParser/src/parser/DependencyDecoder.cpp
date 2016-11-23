@@ -2451,7 +2451,7 @@ void DependencyDecoder::DecodeMinLoss(Instance *instance, Parts *parts,
 			break;
 		}
 		heads[best_v] = best_u;
-		LOG(INFO) << "call to update data" << endl;
+		//LOG(INFO) << "call to update data" << endl;
 		updateData(best_u, best_v,dependency_parts, num_arcs, sentenceSize, &roots, &part2prob, scores,
 				&edge2LostEdges, &edge2LostParts, &E, &subTrees, &edge2parts, predicted_output, &part2val,alpha, heads);
 		if (printIlan) {
@@ -2568,6 +2568,8 @@ void DependencyDecoder::DecodeRikiMinLoss(Instance *instance, Parts *parts,
 	}
 }
 
+
+
 bool InsertEdge(int u, int v, int r ,vector<int> *roots, vector<vector<int> > *subTrees, vector<vector<int> > *edge2parts,
 		vector<double> *predicted_output, vector<vector<int> > *E, DependencyParts *dependency_parts){
 	int uRoot = (*roots)[u];
@@ -2596,7 +2598,7 @@ bool InsertEdge(int u, int v, int r ,vector<int> *roots, vector<vector<int> > *s
 
 
 	 //insert to predicted output
-	 (*predicted_output)[r] = 1.0;
+	(*predicted_output)[r] = 1.0;
 	for (int j = 0; j < (*edge2parts)[r].size(); j++) {
 		int r2 = (*edge2parts)[r][j];
 		// check if part is complete
@@ -2671,7 +2673,169 @@ bool compareByScore( const pair< pair <int, int> , pair <int, double> > & a, con
 	  return a.second.second > b.second.second;
 	}
 
+void DependencyDecoder::GreedyTreeBuilder2(int sentenceSize,
+		const vector<double> &scores, vector<vector<int> > *E,
+		vector<double> *predicted_output, Parts *parts, vector<int> *heads, vector<vector<int> > *edge2parts){
+	/*
+	 * second method to graph build.
+	 *
+	 */
+	vector<vector<pair< pair <int, int> , pair <int, double> > > > outside_edges(sentenceSize);
+	vector<bool> is_in (sentenceSize, false);
+	vector<vector<pair< pair <int, int> , pair <int, double> > > > all_edges(sentenceSize);
+	DependencyParts *dependency_parts = static_cast<DependencyParts*>(parts);
+	for(int u = 0 ; u < sentenceSize; u ++){
+		for(int v =0 ; v<sentenceSize; v++){
+			if ((u==v) || ((*E)[u][v]<0)){
+				all_edges[u].push_back(make_pair(make_pair(-1, -1), make_pair(-1, -1*INFINITY)));
+				continue;
+			}
+			int r = (*E)[u][v];
+			all_edges[u].push_back(make_pair(make_pair(u, v), make_pair(r, scores[r])));
+		}
+		sort(all_edges[u].begin(), all_edges[u].end(), compareByScore);
+	}
 
+	int outside_edges_size = 1;
+	is_in[0] = true;
+	outside_edges.insert(outside_edges.begin(), all_edges[0]); // inserting all the root's edges.
+	/* printing
+	LOG(INFO)<<"ALL all_edges "<< endl;
+	for(int u = 0 ; u < sentenceSize; u ++){
+		cout << "u : " << u <<endl;
+		for(int v =0 ; v<sentenceSize; v++){
+			cout<<"      (" << all_edges[u][v].first.first << " , " << all_edges[u][v].first.second << " ) " << all_edges[u][v].second.second<<endl;
+		}
+	}
+	cout<< "root info:" << endl;
+	for(int k=0; k<outside_edges[0].size(); k++){
+		cout<<"      (" << outside_edges[0][k].first.first << " , " << outside_edges[0][k].first.second << " ) " << outside_edges[0][k].second.second<<endl;
+	}*/
+	int assigned_edges = 0;
+	int chosen_node;
+	while((assigned_edges<= sentenceSize-1)&&(outside_edges_size>0)){
+		pair< pair <int, int> , pair <int, double> > max_edge = make_pair(make_pair(-2, -1), make_pair(-1, -1.0));
+		double max_score = -1*INFINITY;
+		chosen_node = -1;
+		for(int i=0; i<outside_edges_size; i++ ){
+			vector<pair< pair <int, int> , pair <int, double> > > cur_node_edges_list = outside_edges[i];
+			if((cur_node_edges_list.size() == 0)||(cur_node_edges_list[0].first.second<0)){
+				outside_edges.erase(outside_edges.begin() + i);
+				outside_edges_size--;
+				continue;
+			}
+			if ((max_edge.first.first == -2) || (cur_node_edges_list[0].second.second>max_score)){
+				max_edge = cur_node_edges_list[0];
+				max_score = cur_node_edges_list[0].second.second;
+				chosen_node = i;
+			}
+		}
+		if(max_edge.first.first == -2){
+			break;
+		}
+		//cout<< "chosen edge : (" << max_edge.first.first<< " , " << max_edge.first.second << " ) " << max_edge.second.second <<endl;
+		assigned_edges ++ ;
+		int u = max_edge.first.first;
+		int v = max_edge.first.second;
+
+		outside_edges[chosen_node].erase(outside_edges[chosen_node].begin());
+		/*
+		for(int j = 0; j< outside_edges_size; j++){
+			cout<< "in list " << endl;
+			for(int i=0; i<outside_edges[j].size() ; i++){
+				cout<< " ( " << outside_edges[j][i].first.first << " , " << outside_edges[j][i].first.second ;
+			}
+			cout<< endl;
+		}*/
+		if(!is_in[v]){
+			/*
+			cout<< "INSERTED " << v << " to list : "<<endl;
+			cout << "outside_edges_size : " << outside_edges_size << " all_edges " <<endl;
+			for(int j = 0; j< all_edges[v].size(); j++){
+				cout<< " ( " << all_edges[v][j].first.first << " , " << all_edges[v][j].first.second ;
+			}*/
+			outside_edges.insert(outside_edges.begin() + outside_edges_size, all_edges[v]);
+			is_in[v] = true;
+			outside_edges_size++;
+			/*
+			for(int j = 0; j< outside_edges_size; j++){
+				for(int i=0; i<outside_edges[j].size() ; i++){
+					cout<< " ( " << outside_edges[j][i].first.first << " , " << outside_edges[j][i].first.second ;
+				}
+				cout<< endl;
+			}*/
+		}
+
+
+		// insertion to the predicted
+		int r = max_edge.second.first;
+		(*predicted_output)[r] = 1.0;
+		for (int j = 0; j < (*edge2parts)[r].size(); j++) {
+			int r2 = (*edge2parts)[r][j];
+			// check if part is complete
+			int r3,r4,r5,h,m,s,g,k,os;
+			DependencyPartSibl *sibl;
+			DependencyPartGrandpar *GP;
+			DependencyPartGrandSibl *lostGS;
+			DependencyPartTriSibl*lostTS;
+			Part *currPart = (*dependency_parts)[r2];
+			switch (currPart->type()) {
+				case DEPENDENCYPART_SIBL:
+					sibl = static_cast<DependencyPartSibl*>(currPart);
+					h = sibl->head();
+					m = sibl->modifier();
+					s = sibl->sibling();
+					r3 = (*E)[h][m];
+					r4 = (*E)[h][s];
+					if ((r3 == -2) && (r4 == -2)) {
+						(*predicted_output)[r2] = 1.0;
+					}
+					break;
+				case DEPENDENCYPART_GRANDPAR:
+					GP = static_cast<DependencyPartGrandpar*>(currPart);
+					g = GP->grandparent();
+					h = GP->head();
+					m = GP->modifier();
+					r3 = (*E)[h][m];
+					r4 = (*E)[g][h];
+					if ((r3 == -2) && (r4 == -2)) {
+						(*predicted_output)[r2] = 1.0;
+					}
+					break;
+				case DEPENDENCYPART_GRANDSIBL:
+					lostGS = static_cast<DependencyPartGrandSibl*>(currPart);
+					g = lostGS->grandparent();
+					h = lostGS->head();
+					m = lostGS->modifier();
+					s = lostGS->sibling();
+					r3 = (*E)[g][h];
+					r4 = (*E)[h][m];
+					r5 = (*E)[h][s];
+					if ((r3 == -2) && (r4 == -2) && (r5 == -2)) {
+						(*predicted_output)[r2] = 1.0;
+					}
+					break;
+				case DEPENDENCYPART_TRISIBL:
+					lostTS = static_cast<DependencyPartTriSibl*>(currPart);
+					h = lostTS->head();
+					m = lostTS->modifier();
+					s = lostTS->sibling();
+					os = lostTS->other_sibling();
+					r3 = (*E)[h][m];
+					r4 = (*E)[h][s];
+					r5 = (*E)[h][os];
+					if ((r3 == -2) && (r4 == -2) && (r5 == -2)) {
+						(*predicted_output)[r2] = 1.0;
+					}
+					break;
+				default:
+					LOG(ERROR) << "BAD PART TYPE: " << currPart->type() << endl;
+					CHECK(false);
+			}
+		}
+	}
+
+}
 void DependencyDecoder::GreedyTreeBuilder(int sentenceSize,
 		const vector<double> &scores, vector<vector<int> > *E,
 		vector<double> *predicted_output, Parts *parts, vector<int> *heads, vector<vector<int> > *edge2parts)
@@ -2681,13 +2845,12 @@ void DependencyDecoder::GreedyTreeBuilder(int sentenceSize,
 {
 
 	vector<pair< pair <int, int> , pair <int, double> > > EdgesMap (sentenceSize * sentenceSize,
-			make_pair(make_pair(-1, -1 ), make_pair(-1,-1.0*INFINITY)));
+			make_pair(make_pair(-1, -1 ), make_pair(-1,-1.0)));
 	vector<int> roots (sentenceSize, 0);
 	vector<vector<int> > subTrees;
 	// initialization
 	DependencyParts *dependency_parts = static_cast<DependencyParts*>(parts);
-	int offset_arcs, num_arcs;
-	dependency_parts->GetOffsetArc(&offset_arcs, &num_arcs);
+
 
 	for(int u = 0 ; u < sentenceSize; u ++){
 		roots[u] = u;
@@ -2704,13 +2867,13 @@ void DependencyDecoder::GreedyTreeBuilder(int sentenceSize,
 
 	initsecondaryDS(&roots, &subTrees, sentenceSize);
 
+
 	sort(EdgesMap.begin(), EdgesMap.end(), compareByScore);
 
 	int edges_used = 0;
-
 	for(int i=0; i< EdgesMap.size(); i ++ ) {
 		//LOG(INFO) << EdgesMap[i].second.second  << " ";
-		if(EdgesMap[i].second.second < 0 || (edges_used == sentenceSize - 1)){
+		if(EdgesMap[i].second.second < 0 || (edges_used >= sentenceSize - 1)){
 			break;
 		}
 		if(InsertEdge(EdgesMap[i].first.first, EdgesMap[i].first.second, EdgesMap[i].second.first, &roots, &subTrees, edge2parts, predicted_output,E, dependency_parts)){
@@ -2722,6 +2885,7 @@ void DependencyDecoder::GreedyTreeBuilder(int sentenceSize,
 	if(edges_used < sentenceSize - 1){
 		LOG(INFO)  << "NOT A TREE! " << edges_used << " from " << sentenceSize -1 << endl;
 	}
+
 }
 
 
@@ -3008,6 +3172,11 @@ void DependencyDecoder::DecodeRikiMinLossGreedyBuildCalcLiteJustGain(Instance *i
                                           vector<double> &scores,
                                           vector<double> *predicted_output) {
 
+	struct timeval tp;
+	gettimeofday(&tp, NULL);
+	long int time_begin = tp.tv_usec;
+
+
 	bool printRiki = false;
 	DependencyParts *dependency_parts = static_cast<DependencyParts*>(parts);
 	DependencyInstanceNumeric* sentence = static_cast<DependencyInstanceNumeric*>(instance);
@@ -3071,7 +3240,10 @@ void DependencyDecoder::DecodeRikiMinLossGreedyBuildCalcLiteJustGain(Instance *i
 	vector<vector<int> > edge2LostEdges, edge2LostParts, E, subTrees, edge2parts;
 
 	initDataStructures(dependency_parts, offset_arcs, num_arcs, sentenceSize, &part2prob, scores, &edge2LostEdges, &edge2LostParts, &E, &edge2parts, &part2val, alpha, &heads);
-	initsecondaryDS(&roots, &subTrees, sentenceSize);
+	//initsecondaryDS(&roots, &subTrees, sentenceSize);
+	gettimeofday(&tp, NULL);
+	long int initial_time = tp.tv_usec - time_begin ;
+	time_begin=tp.tv_usec ;
 	// n * ( E + n )
 	//LOG(INFO)  << "Start initializing new scores" << endl;
 	double currLoss;
@@ -3090,12 +3262,20 @@ void DependencyDecoder::DecodeRikiMinLossGreedyBuildCalcLiteJustGain(Instance *i
 			}
 		}
 	}
+	gettimeofday(&tp, NULL);
+	long int compute_scores_time = tp.tv_usec - time_begin ;
+	time_begin=tp.tv_usec ;
 
 	GreedyTreeBuilder(sentenceSize, new_scores, &E, predicted_output, parts, &heads, &edge2parts);
 	/*if (pipe_->GetDependencyOptions()->improveLocal() > 0) {
 		improveLocal(predicted_output,subTrees,edge2partsCopy,scores, dependency_parts,
 				sentenceSize, num_arcs, &ECopy, heads,pipe_->GetDependencyOptions()->improveLocal());
 	}*/
+	gettimeofday(&tp, NULL);
+	long int build_tree_time = tp.tv_usec - time_begin ;
+	time_begin=tp.tv_usec ;
+	LOG(INFO) << "=========== init: " << initial_time << " compute scores: " << compute_scores_time << " build tree : " << build_tree_time << endl;
+
 }
 
 // Decode building a factor graph and calling the AD3 algorithm.

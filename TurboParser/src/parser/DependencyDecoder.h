@@ -81,6 +81,10 @@ class DependencyDecoder : public Decoder {
                             vector<double> *total_scores,
                             vector<double> *label_marginals);
 
+  void GreedyTreeBuilder2(int sentenceSize,
+  		const vector<double> &scores, vector<vector<int> > *E,
+  		vector<double> *predicted_output, Parts *parts, vector<int> *heads, vector<vector<int> > *edge2parts);
+
   void DecodeBasic(Instance *instance, Parts *parts, 
                    const vector<double> &scores,
                    vector<double> *predicted_output,
